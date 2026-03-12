@@ -1,0 +1,1558 @@
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\api\api.py
+==================================================
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\api\api.py
+==================================================
+from fastapi import APIRouter
+
+from dashboard.services.metrics_service import get_metrics
+from dashboard.services.task_service import get_tasks
+from dashboard.services.bug_service import get_bugs
+from dashboard.services.cost_service import get_costs
+from dashboard.services.system_service import get_system_status
+from dashboard.services.log_service import get_logs
+from dashboard.services.ai_control_service import (
+    start_ai,
+    stop_ai,
+    pause_ai,
+    get_ai_status
+)
+
+api = APIRouter()
+
+
+@api.get("/logs")
+def logs():
+    return get_logs()
+
+
+@api.get("/metrics")
+def metrics():
+    return get_metrics()
+
+
+@api.get("/tasks")
+def tasks():
+    return get_tasks()
+
+
+@api.get("/bugs")
+def bugs():
+    return get_bugs()
+
+
+@api.get("/costs")
+def costs():
+
+    try:
+        return get_costs()
+    except Exception:
+        return {"today": 0, "month": 0}
+
+@api.get("/system")
+def system():
+    return get_system_status()
+
+
+@api.post("/ai/start")
+def ai_start():
+    return start_ai()
+
+
+@api.post("/ai/stop")
+def ai_stop():
+    return stop_ai()
+
+
+@api.post("/ai/pause")
+def ai_pause():
+    return pause_ai()
+
+
+@api.get("/ai/status")
+def ai_status():
+    return get_ai_status()
+    
+    
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\api\dev_command_center_api.py
+==================================================
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from pathlib import Path
+
+from scripts.utils.logger import get_logger
+from dashboard.api.api import api as api_router
+
+logger = get_logger("dashboard_server")
+
+# ---------------------------------------
+# Path Resolve (environment independent)
+# ---------------------------------------
+
+ROOT = Path(__file__).resolve().parents[2]
+STATIC_DIR = ROOT / "dashboard" / "static"
+
+
+def create_app():
+
+    app = FastAPI(
+        title="AI Dev Command Center",
+        version="1.0"
+    )
+
+    # ----------------------------
+    # CORS
+    # ----------------------------
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # ----------------------------
+    # API Routers
+    # ----------------------------
+
+    app.include_router(
+        api_router,
+        prefix="/api"
+    )
+
+    # ----------------------------
+    # Static UI
+    # ----------------------------
+
+    app.mount(
+        "/",
+        StaticFiles(directory=str(STATIC_DIR), html=True),
+        name="dashboard"
+    )
+
+    # ----------------------------
+    # Startup
+    # ----------------------------
+
+    @app.on_event("startup")
+    async def startup_event():
+
+        logger.info("Dev Command Center started")
+
+    # ----------------------------
+    # Health Check
+    # ----------------------------
+
+    @app.get("/health")
+    async def health():
+
+        return {
+            "status": "ok",
+            "service": "ai-dev-dashboard"
+        }
+
+    return app
+
+
+app = create_app()
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\services\bug_service.py
+==================================================
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+BUG_DIR = ROOT / "tickets/bugs"
+
+
+def parse_bug_md(text: str):
+
+    bug = {
+        "id": "",
+        "title": "",
+        "status": "",
+        "priority": ""
+    }
+
+    id_match = re.search(r"^ID:\s*(.*)", text, re.MULTILINE)
+    if id_match:
+        bug["id"] = id_match.group(1).strip()
+
+    title_match = re.search(r"^Title:\s*(.*)", text, re.MULTILINE)
+    if title_match:
+        bug["title"] = title_match.group(1).strip()
+
+    status_match = re.search(r"^Status:\s*(.*)", text, re.MULTILINE)
+    if status_match:
+        bug["status"] = status_match.group(1).strip()
+
+    priority_match = re.search(r"^Priority:\s*(.*)", text, re.MULTILINE)
+    if priority_match:
+        bug["priority"] = priority_match.group(1).strip()
+
+    return bug
+
+
+def get_bugs():
+
+    bugs = []
+
+    if not BUG_DIR.exists():
+        return bugs
+
+    for f in BUG_DIR.glob("*.md"):
+
+        try:
+
+            with open(f, encoding="utf8") as fp:
+                text = fp.read()
+
+            bug = parse_bug_md(text)
+
+            bugs.append(bug)
+
+        except Exception:
+            continue
+
+    return bugs
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\services\cost_service.py
+==================================================
+import time
+from threading import Lock
+
+from scripts.metrics.cost_control_engine import CostControlEngine
+from scripts.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+_engine = CostControlEngine()
+
+CACHE_TTL = 3
+
+_cache_time = 0
+_cache_data = None
+
+_lock = Lock()
+
+
+def _refresh_cache():
+
+    global _cache_time
+    global _cache_data
+
+    try:
+
+        today = _engine.get_today_cost()
+        month = _engine.get_month_cost()
+
+        daily_budget = _engine.budget["daily_usd"]
+        monthly_budget = _engine.budget["monthly_usd"]
+
+        _cache_data = {
+            "today": today,
+            "month": month,
+            "daily_budget": daily_budget,
+            "monthly_budget": monthly_budget,
+            "remaining_today": max(0, daily_budget - today),
+            "remaining_month": max(0, monthly_budget - month)
+        }
+
+        _cache_time = time.time()
+
+    except Exception as e:
+
+        logger.error(f"Cost service error: {e}")
+
+        _cache_data = {
+            "today": 0,
+            "month": 0,
+            "daily_budget": 0,
+            "monthly_budget": 0,
+            "remaining_today": 0,
+            "remaining_month": 0
+        }
+
+
+def get_costs():
+
+    global _cache_time
+    global _cache_data
+
+    with _lock:
+
+        if _cache_data is None or time.time() - _cache_time > CACHE_TTL:
+            _refresh_cache()
+
+        return _cache_data
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\services\metrics_service.py
+==================================================
+from dashboard.services.task_service import get_tasks
+from dashboard.services.bug_service import get_bugs
+
+
+def get_metrics():
+
+    tasks = get_tasks()
+    bugs = get_bugs()
+
+    return {
+        "tasks": len(tasks),
+        "bugs": len(bugs)
+    }
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\services\system_service.py
+==================================================
+import psutil
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+AUTOPILOT_STATE_FILE = ROOT / "runtime" / "autopilot_state.txt"
+
+
+def _read_ai_status():
+
+    if not AUTOPILOT_STATE_FILE.exists():
+        return "unknown"
+
+    try:
+
+        with open(AUTOPILOT_STATE_FILE, encoding="utf8") as f:
+            status = f.read().strip()
+
+        if status == "":
+            return "unknown"
+
+        return status
+
+    except Exception:
+        return "error"
+
+
+def get_system_status():
+
+    return {
+
+        "cpu": psutil.cpu_percent(),
+
+        "memory": psutil.virtual_memory().percent,
+
+        "time": int(time.time()),
+
+        "ai_status": _read_ai_status()
+
+    }
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\services\task_service.py
+==================================================
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+TASK_DIR = ROOT / "tickets/tasks"
+
+
+def parse_task_md(text: str):
+
+    task = {
+        "id": "",
+        "title": "",
+        "status": "",
+        "priority": ""
+    }
+
+    id_match = re.search(r"^ID:\s*(.*)", text, re.MULTILINE)
+    if id_match:
+        task["id"] = id_match.group(1).strip()
+
+    title_match = re.search(r"^Title:\s*(.*)", text, re.MULTILINE)
+
+    if title_match:
+        task["title"] = title_match.group(1).strip()
+
+    status_match = re.search(r"^Status:\s*(.*)", text, re.MULTILINE)
+    if status_match:
+        task["status"] = status_match.group(1).strip()
+
+    priority_match = re.search(r"^Priority:\s*(.*)", text, re.MULTILINE)
+    if priority_match:
+        task["priority"] = priority_match.group(1).strip()
+
+    return task
+
+
+def get_tasks():
+
+    tasks = []
+
+    if not TASK_DIR.exists():
+        return tasks
+
+    for f in TASK_DIR.glob("*.md"):
+
+        try:
+
+            with open(f, encoding="utf8") as fp:
+                text = fp.read()
+
+            task = parse_task_md(text)
+
+            tasks.append(task)
+
+        except Exception:
+            continue
+
+    return tasks
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\static\app.js
+==================================================
+async function loadMetrics() {
+
+    try {
+
+        const res = await fetch("/api/metrics")
+        const data = await res.json()
+
+        document.getElementById("tasks_count").innerText = data.tasks
+        document.getElementById("bugs_count").innerText = data.bugs
+
+    } catch (e) {
+
+        console.log("metrics error", e)
+
+    }
+}
+
+
+async function loadCosts() {
+
+    try {
+
+        const res = await fetch("/api/costs")
+        const data = await res.json()
+
+        document.getElementById("cost_today").innerText = data.today
+        document.getElementById("cost_month").innerText = data.month
+
+    } catch (e) {
+
+        console.log("cost error", e)
+
+    }
+}
+
+
+async function loadTasks() {
+
+    try {
+
+        const res = await fetch("/api/tasks")
+        const tasks = await res.json()
+
+        const list = document.getElementById("tasks")
+
+        list.innerHTML = ""
+
+        tasks.forEach(t => {
+
+            const li = document.createElement("li")
+            li.innerText = t.title + " [" + t.status + "]"
+
+            list.appendChild(li)
+
+        })
+
+    } catch (e) {
+
+        console.log("tasks error", e)
+
+    }
+}
+
+
+async function loadBugs() {
+
+    try {
+
+        const res = await fetch("/api/bugs")
+        const bugs = await res.json()
+
+        const list = document.getElementById("bugs")
+
+        list.innerHTML = ""
+
+        bugs.forEach(b => {
+
+            const li = document.createElement("li")
+            li.innerText = b.title + " [" + b.status + "]"
+
+            list.appendChild(li)
+
+        })
+
+    } catch (e) {
+
+        console.log("bugs error", e)
+
+    }
+}
+
+
+async function loadSystem() {
+
+    try {
+
+        const res = await fetch("/api/system")
+        const data = await res.json()
+
+        document.getElementById("status").innerText =
+            "AI: " + data.ai_status +
+            " | CPU: " + data.cpu + "%" +
+            " | MEM: " + data.memory + "%"
+
+    } catch (e) {
+
+        console.log("system error", e)
+
+    }
+}
+
+
+async function refresh() {
+
+    await loadMetrics()
+    await loadCosts()
+    await loadTasks()
+    await loadBugs()
+    await loadSystem()
+
+}
+
+
+setInterval(refresh, 5000)
+
+refresh()
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\static\index.html
+==================================================
+<!DOCTYPE html>
+<html>
+<head>
+
+<title>AI DevOS Command Center</title>
+
+<link rel="stylesheet" href="style.css">
+
+</head>
+
+<body>
+
+<h1>AI Development Command Center</h1>
+
+<div id="status">Loading...</div>
+
+<h2>Tasks</h2>
+<ul id="tasks"></ul>
+
+<h2>Bugs</h2>
+<ul id="bugs"></ul>
+
+<h2>Metrics</h2>
+
+Tasks: <span id="tasks_count"></span><br>
+Bugs: <span id="bugs_count"></span><br>
+
+Today Cost: <span id="cost_today"></span><br>
+Month Cost: <span id="cost_month"></span>
+
+<script src="app.js"></script>
+
+</body>
+</html>
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\static\style.css
+==================================================
+body{
+
+font-family:Arial;
+padding:40px;
+background:#111;
+color:#eee;
+
+}
+
+
+
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\api\dev_command_center_api.py
+==================================================
+from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from pathlib import Path
+import asyncio
+
+from scripts.utils.logger import get_logger
+from dashboard.api.api import api as api_router
+
+logger = get_logger("dashboard_server")
+
+# ---------------------------------------
+# Path Resolve
+# ---------------------------------------
+
+ROOT = Path(__file__).resolve().parents[2]
+STATIC_DIR = ROOT / "dashboard" / "static"
+
+# ---------------------------------------
+# WebSocket clients
+# ---------------------------------------
+
+clients = []
+
+# ---------------------------------------
+# FastAPI App
+# ---------------------------------------
+
+
+def create_app():
+
+    app = FastAPI(
+        title="AI Dev Command Center",
+        version="1.0"
+    )
+
+    # ----------------------------
+    # CORS
+    # ----------------------------
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # ----------------------------
+    # API Router
+    # ----------------------------
+
+    app.include_router(
+        api_router,
+        prefix="/api"
+    )
+
+    # ----------------------------
+    # Static UI
+    # ----------------------------
+
+    app.mount(
+        "/",
+        StaticFiles(directory=str(STATIC_DIR), html=True),
+        name="dashboard"
+    )
+
+    # ----------------------------
+    # Startup
+    # ----------------------------
+
+    @app.on_event("startup")
+    async def startup_event():
+
+        logger.info("Dev Command Center started")
+
+    # ----------------------------
+    # Health Check
+    # ----------------------------
+
+    @app.get("/health")
+    async def health():
+
+        return {
+            "status": "ok",
+            "service": "ai-dev-dashboard"
+        }
+
+    # ----------------------------
+    # WebSocket
+    # ----------------------------
+
+    @app.websocket("/ws")
+    async def websocket_endpoint(ws: WebSocket):
+
+        await ws.accept()
+        clients.append(ws)
+
+        logger.info("WebSocket client connected")
+
+        try:
+
+            while True:
+                await ws.receive_text()
+
+        except Exception:
+
+            logger.info("WebSocket client disconnected")
+
+        finally:
+
+            if ws in clients:
+                clients.remove(ws)
+
+    return app
+
+
+app = create_app()
+
+
+# ---------------------------------------
+# Broadcast helper
+# ---------------------------------------
+
+async def broadcast(data: dict):
+
+    for c in clients:
+
+        try:
+            await c.send_json(data)
+
+        except Exception:
+            pass
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\runtime\autopilot_command.txt
+==================================================
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\services\ai_control_service.py
+==================================================
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+RUNTIME_DIR = ROOT / "runtime"
+
+STATE_FILE = RUNTIME_DIR / "autopilot_state.txt"
+COMMAND_FILE = RUNTIME_DIR / "autopilot_command.txt"
+
+
+def _write_command(cmd: str):
+
+    RUNTIME_DIR.mkdir(exist_ok=True)
+
+    with open(COMMAND_FILE, "w", encoding="utf8") as f:
+        f.write(cmd)
+
+
+def start_ai():
+
+    _write_command("start")
+
+    return {
+        "result": "ok",
+        "command": "start"
+    }
+
+
+def stop_ai():
+
+    _write_command("stop")
+
+    return {
+        "result": "ok",
+        "command": "stop"
+    }
+
+
+def pause_ai():
+
+    _write_command("pause")
+
+    return {
+        "result": "ok",
+        "command": "pause"
+    }
+
+
+def get_ai_status():
+
+    if not STATE_FILE.exists():
+        return {"status": "unknown"}
+
+    try:
+
+        with open(STATE_FILE, encoding="utf8") as f:
+            status = f.read().strip()
+
+        if status == "":
+            status = "unknown"
+
+        return {"status": status}
+
+    except Exception:
+
+        return {"status": "error"}
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\services\bug_service.py
+==================================================
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+BUG_DIR = ROOT / "tickets/bugs"
+
+
+def parse_bug_md(text: str):
+
+    bug = {
+        "id": "",
+        "title": "",
+        "status": "",
+        "priority": ""
+    }
+
+    id_match = re.search(r"^ID:\s*(.*)", text, re.MULTILINE)
+    if id_match:
+        bug["id"] = id_match.group(1).strip()
+
+    title_match = re.search(r"^Title:\s*(.*)", text, re.MULTILINE)
+    if title_match:
+        bug["title"] = title_match.group(1).strip()
+
+    status_match = re.search(r"^Status:\s*(.*)", text, re.MULTILINE)
+    if status_match:
+        bug["status"] = status_match.group(1).strip()
+
+    priority_match = re.search(r"^Priority:\s*(.*)", text, re.MULTILINE)
+    if priority_match:
+        bug["priority"] = priority_match.group(1).strip()
+
+    return bug
+
+
+def get_bugs():
+
+    bugs = []
+
+    if not BUG_DIR.exists():
+        return bugs
+
+    for f in BUG_DIR.glob("*.md"):
+
+        try:
+
+            with open(f, encoding="utf8") as fp:
+                text = fp.read()
+
+            bug = parse_bug_md(text)
+
+            bugs.append(bug)
+
+        except Exception:
+            continue
+
+    return bugs
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\services\cost_service.py
+==================================================
+import time
+from threading import Lock
+
+from scripts.metrics.cost_control_engine import CostControlEngine
+from scripts.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+_engine = CostControlEngine()
+
+CACHE_TTL = 3
+
+_cache_time = 0
+_cache_data = None
+
+_lock = Lock()
+
+
+def _refresh_cache():
+
+    global _cache_time
+    global _cache_data
+
+    try:
+
+        today = _engine.get_today_cost()
+        month = _engine.get_month_cost()
+
+        daily_budget = _engine.budget["daily_usd"]
+        monthly_budget = _engine.budget["monthly_usd"]
+
+        _cache_data = {
+            "today": today,
+            "month": month,
+            "daily_budget": daily_budget,
+            "monthly_budget": monthly_budget,
+            "remaining_today": max(0, daily_budget - today),
+            "remaining_month": max(0, monthly_budget - month)
+        }
+
+        _cache_time = time.time()
+
+    except Exception as e:
+
+        logger.error(f"Cost service error: {e}")
+
+        _cache_data = {
+            "today": 0,
+            "month": 0,
+            "daily_budget": 0,
+            "monthly_budget": 0,
+            "remaining_today": 0,
+            "remaining_month": 0
+        }
+
+
+def get_costs():
+
+    global _cache_time
+    global _cache_data
+
+    with _lock:
+
+        if _cache_data is None or time.time() - _cache_time > CACHE_TTL:
+            _refresh_cache()
+
+        return _cache_data
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\services\log_service.py
+==================================================
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+LOG_FILE = ROOT / "runtime" / "autopilot.log"
+
+
+def get_logs():
+
+    if not LOG_FILE.exists():
+        return {"logs": []}
+
+    try:
+
+        with open(LOG_FILE, encoding="utf8") as f:
+            lines = f.readlines()
+
+        # 譛譁ｰ50陦・
+        lines = lines[-50:]
+
+        return {
+            "logs": [l.strip() for l in lines]
+        }
+
+    except Exception:
+
+        return {"logs": []}
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\services\metrics_service.py
+==================================================
+from dashboard.services.task_service import get_tasks
+from dashboard.services.bug_service import get_bugs
+
+
+def get_metrics():
+
+    tasks = get_tasks()
+    bugs = get_bugs()
+
+    return {
+        "tasks": len(tasks),
+        "bugs": len(bugs)
+    }
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\services\system_service.py
+==================================================
+import psutil
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+AUTOPILOT_STATE_FILE = ROOT / "runtime" / "autopilot_state.txt"
+
+
+def _read_ai_status():
+
+    if not AUTOPILOT_STATE_FILE.exists():
+        return "unknown"
+
+    try:
+
+        with open(AUTOPILOT_STATE_FILE, encoding="utf8") as f:
+            status = f.read().strip()
+
+        if status == "":
+            return "unknown"
+
+        return status
+
+    except Exception:
+        return "error"
+
+
+def get_system_status():
+
+    return {
+
+        "cpu": psutil.cpu_percent(interval=0.1),
+
+        "memory": psutil.virtual_memory().percent,
+
+        "time": int(time.time()),
+
+        "ai_status": _read_ai_status()
+
+    }
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\services\task_service.py
+==================================================
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+TASK_DIR = ROOT / "tickets/tasks"
+
+
+def parse_task_md(text: str):
+
+    task = {
+        "id": "",
+        "title": "Untitled Task",
+        "status": "unknown",
+        "priority": ""
+    }
+
+    id_match = re.search(r"^ID:\s*(.*)", text, re.MULTILINE)
+    if id_match:
+        task["id"] = id_match.group(1).strip()
+
+    title_match = re.search(r"^Title:\s*(.*)", text, re.MULTILINE)
+    if title_match:
+        value = title_match.group(1).strip()
+        if value:
+            task["title"] = value
+
+    status_match = re.search(r"^Status:\s*(.*)", text, re.MULTILINE)
+    if status_match:
+        value = status_match.group(1).strip()
+        if value:
+            task["status"] = value
+
+    priority_match = re.search(r"^Priority:\s*(.*)", text, re.MULTILINE)
+    if priority_match:
+        task["priority"] = priority_match.group(1).strip()
+
+    return task
+
+
+def get_tasks():
+
+    tasks = []
+
+    if not TASK_DIR.exists():
+        return tasks
+
+    for f in TASK_DIR.glob("*.md"):
+
+        try:
+
+            with open(f, encoding="utf8") as fp:
+                text = fp.read()
+
+            task = parse_task_md(text)
+
+            tasks.append(task)
+
+        except Exception:
+            continue
+
+    return tasks
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\static\app.js
+==================================================
+async function safeFetch(url) {
+
+    const res = await fetch(url)
+
+    if (!res.ok) {
+        throw new Error("API error")
+    }
+
+    return await res.json()
+
+}
+
+
+async function loadMetrics() {
+
+    try {
+
+        const data = await safeFetch("/api/metrics")
+
+        document.getElementById("tasks_count").innerText = data.tasks
+        document.getElementById("bugs_count").innerText = data.bugs
+
+    } catch (e) {
+
+        console.log("metrics error", e)
+
+    }
+
+}
+
+
+async function loadCosts() {
+
+    try {
+
+        const data = await safeFetch("/api/costs")
+
+        document.getElementById("cost_today").innerText = data.today
+        document.getElementById("cost_month").innerText = data.month
+
+    } catch (e) {
+
+        console.log("cost error", e)
+
+    }
+
+}
+
+
+function createItemElement(item) {
+
+    const li = document.createElement("li")
+
+    const statusColor = {
+        "todo": "gray",
+        "doing": "orange",
+        "done": "green",
+        "open": "red",
+        "closed": "green"
+    }
+
+    const color = statusColor[item.status] || "white"
+
+    li.innerHTML =
+        "<b>" + item.title + "</b> " +
+        "<span style='color:" + color + "'>[" + item.status + "]</span> " +
+        "<span style='color:#999'>(" + item.priority + ")</span>"
+
+    return li
+
+}
+
+
+async function loadTasks() {
+
+    try {
+
+        const tasks = await safeFetch("/api/tasks")
+
+        const list = document.getElementById("tasks")
+
+        list.innerHTML = ""
+
+        tasks.forEach(t => {
+
+            list.appendChild(createItemElement(t))
+
+        })
+
+    } catch (e) {
+
+        console.log("tasks error", e)
+
+    }
+
+}
+
+
+async function loadBugs() {
+
+    try {
+
+        const bugs = await safeFetch("/api/bugs")
+
+        const list = document.getElementById("bugs")
+
+        list.innerHTML = ""
+
+        bugs.forEach(b => {
+
+            list.appendChild(createItemElement(b))
+
+        })
+
+    } catch (e) {
+
+        console.log("bugs error", e)
+
+    }
+
+}
+
+
+async function loadSystem() {
+
+    try {
+
+        const data = await safeFetch("/api/system")
+
+        document.getElementById("status").innerText =
+            "AI: " + data.ai_status +
+            " | CPU: " + data.cpu + "%" +
+            " | MEM: " + data.memory + "%"
+
+    } catch (e) {
+
+        console.log("system error", e)
+
+    }
+
+}
+
+
+async function loadLogs() {
+
+    try {
+
+        const data = await safeFetch("/api/logs")
+
+        const logBox = document.getElementById("logs")
+
+        if (!logBox) return
+
+        logBox.innerText = data.logs.join("\n")
+
+        logBox.scrollTop = logBox.scrollHeight
+
+    } catch (e) {
+
+        console.log("logs error", e)
+
+    }
+
+}
+
+
+async function refresh() {
+
+    await loadMetrics()
+    await loadCosts()
+    await loadTasks()
+    await loadBugs()
+    await loadSystem()
+    await loadLogs()
+
+}
+
+
+setInterval(refresh, 5000)
+
+refresh()
+
+
+// ----------------------------
+// WebSocket realtime
+// ----------------------------
+
+try {
+
+	const protocol = location.protocol === "https:" ? "wss://" : "ws://"
+	const ws = new WebSocket(protocol + location.host + "/ws")
+
+    ws.onmessage = (event) => {
+
+        const data = JSON.parse(event.data)
+
+        if (data.type === "tasks") loadTasks()
+        if (data.type === "bugs") loadBugs()
+        if (data.type === "metrics") loadMetrics()
+
+    }
+
+} catch (e) {
+
+    console.log("websocket disabled")
+
+}
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\static\index.html
+==================================================
+<!DOCTYPE html>
+<html>
+<head>
+
+<title>AI DevOS Command Center</title>
+
+<link rel="stylesheet" href="style.css">
+
+</head>
+
+<body>
+
+<h1>AI Development Command Center</h1>
+
+<div id="status">Loading...</div>
+
+<h2>Tasks</h2>
+<ul id="tasks"></ul>
+
+<h2>Bugs</h2>
+<ul id="bugs"></ul>
+
+<h2>Metrics</h2>
+
+<h2>AI Control</h2>
+
+<button onclick="aiStart()">START</button>
+<button onclick="aiPause()">PAUSE</button>
+<button onclick="aiStop()">STOP</button>
+
+Tasks: <span id="tasks_count"></span><br>
+Bugs: <span id="bugs_count"></span><br>
+
+Today Cost: <span id="cost_today"></span><br>
+Month Cost: <span id="cost_month"></span>
+
+<h2>AI Logs</h2>
+
+<pre id="logs" style="
+background:#000;
+color:#0f0;
+padding:10px;
+height:200px;
+overflow:auto;
+"></pre>
+
+<script src="app.js"></script>
+
+</body>
+</html>
+
+
+
+==================================================
+FILE PATH: C:\works\eco\test01\chobi\dashboard\static\style.css
+==================================================
+body {
+
+    font-family: Arial, sans-serif;
+    padding: 40px;
+    background: #111;
+    color: #eee;
+
+}
+
+h1 {
+    margin-bottom: 20px;
+}
+
+h2 {
+    margin-top: 30px;
+}
+
+button {
+    margin-right: 10px;
+    padding: 6px 12px;
+    font-size: 14px;
+}
+
+ul {
+    list-style: none;
+    padding-left: 0;
+}
+
+li {
+    padding: 4px 0;
+}
+
+#status {
+    margin-bottom: 20px;
+    font-weight: bold;
+}
+
+
+// ----------------------------
+// AI control
+// ----------------------------
+
+async function aiStart() {
+
+    try {
+
+        await safeFetch("/api/ai/start")
+
+        console.log("AI START")
+
+    } catch (e) {
+
+        console.log("ai start error", e)
+
+    }
+
+}
+
+async function aiPause() {
+
+    try {
+
+        await safeFetch("/api/ai/pause")
+
+        console.log("AI PAUSE")
+
+    } catch (e) {
+
+        console.log("ai pause error", e)
+
+    }
+
+}
+
+async function aiStop() {
+
+    try {
+
+        await safeFetch("/api/ai/stop")
+
+        console.log("AI STOP")
+
+    } catch (e) {
+
+        console.log("ai stop error", e)
+
+    }
+
+}
+
+
+// ----------------------------
+// AI control
+// ----------------------------
+
+async function aiStart() {
+
+    try {
+
+        await safeFetch("/api/ai/start")
+
+        console.log("AI START")
+
+    } catch (e) {
+
+        console.log("ai start error", e)
+
+    }
+
+}
+
+async function aiPause() {
+
+    try {
+
+        await safeFetch("/api/ai/pause")
+
+        console.log("AI PAUSE")
+
+    } catch (e) {
+
+        console.log("ai pause error", e)
+
+    }
+
+}
+
+async function aiStop() {
+
+    try {
+
+        await safeFetch("/api/ai/stop")
+
+        console.log("AI STOP")
+
+    } catch (e) {
+
+        console.log("ai stop error", e)
+
+    }
+
+}

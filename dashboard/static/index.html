@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+<title>AI DevOS Command Center</title>
+
+<link rel="stylesheet" href="style.css">
+
+</head>
+
+<body>
+
+<h1>AI Development Command Center</h1>
+
+<div id="status">Loading...</div>
+
+<h2>Tasks</h2>
+<ul id="tasks"></ul>
+
+<h2>Bugs</h2>
+<ul id="bugs"></ul>
+
+<h2>Metrics</h2>
+
+<h2>AI Control</h2>
+
+<button onclick="aiStart()">START</button>
+<button onclick="aiPause()">PAUSE</button>
+<button onclick="aiStop()">STOP</button>
+
+Tasks: <span id="tasks_count"></span><br>
+Bugs: <span id="bugs_count"></span><br>
+
+Today Cost: <span id="cost_today"></span><br>
+Month Cost: <span id="cost_month"></span>
+
+<h2>AI Logs</h2>
+
+<pre id="logs" style="
+background:#000;
+color:#0f0;
+padding:10px;
+height:200px;
+overflow:auto;
+"></pre>
+
+<script src="app.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "symbols": {
+    "CaptureService": [
+      "src/services/CaptureService.ts"
+    ]
+  },
+  "dependencies": {
+    "src/background/background.ts": [
+      "../services/CaptureService"
+    ]
+  }
+}

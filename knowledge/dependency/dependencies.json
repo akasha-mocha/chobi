@@ -1,0 +1,20 @@
+{
+  "modules": [
+    "capture",
+    "filename",
+    "download",
+    "settings",
+    "background"
+  ],
+
+  "services": {
+    "capture": "src/services/CaptureService.ts",
+    "filename": "src/services/FileNameService.ts",
+    "download": "src/services/DownloadService.ts",
+    "settings": "src/services/SettingsService.ts"
+  },
+
+  "ui": [
+    "src/options/options.ts"
+  ]
+}
