@@ -6,25 +6,12 @@ from pathlib import Path
 
 from scripts.utils.logger import get_logger
 from dashboard.api.api import api as api_router
+from dashboard.services.ws_manager import manager
 
 logger = get_logger("dashboard_server")
 
-# ---------------------------------------
-# Path Resolve
-# ---------------------------------------
-
 ROOT = Path(__file__).resolve().parents[2]
 STATIC_DIR = ROOT / "dashboard" / "static"
-
-# ---------------------------------------
-# WebSocket clients
-# ---------------------------------------
-
-clients = []
-
-# ---------------------------------------
-# FastAPI App
-# ---------------------------------------
 
 
 def create_app():
@@ -34,10 +21,6 @@ def create_app():
         version="1.0"
     )
 
-    # ----------------------------
-    # CORS
-    # ----------------------------
-
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -46,18 +29,10 @@ def create_app():
         allow_headers=["*"],
     )
 
-    # ----------------------------
-    # API Router
-    # ----------------------------
-
     app.include_router(
         api_router,
         prefix="/api"
     )
-
-    # ----------------------------
-    # Static UI
-    # ----------------------------
 
     app.mount(
         "/",
@@ -65,55 +40,31 @@ def create_app():
         name="dashboard"
     )
 
-    # ----------------------------
-    # Startup
-    # ----------------------------
-
     @app.on_event("startup")
     async def startup_event():
-
         logger.info("Dev Command Center started")
-
-    # ----------------------------
-    # Health Check
-    # ----------------------------
 
     @app.get("/health")
     async def health():
-
         return {
             "status": "ok",
             "service": "ai-dev-dashboard"
         }
 
-    # ----------------------------
-    # WebSocket
-    # ----------------------------
-
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
 
-        await ws.accept()
-        clients.append(ws)
-
-        logger.info("WebSocket client connected")
+        await manager.connect(ws)
 
         try:
-
             while True:
-                try:
-                	await ws.receive_text()
-                except Exception:
-                	break
+                await ws.receive_text()
 
         except Exception:
-
             logger.info("WebSocket client disconnected")
 
         finally:
-
-            if ws in clients:
-                clients.remove(ws)
+            manager.disconnect(ws)
 
     return app
 
@@ -121,23 +72,5 @@ def create_app():
 app = create_app()
 
 
-# ---------------------------------------
-# Broadcast helper
-# ---------------------------------------
-
 async def broadcast(data: dict):
-
-    dead = []
-
-    for c in clients:
-
-        try:
-            await c.send_json(data)
-
-        except Exception:
-            dead.append(c)
-
-    for d in dead:
-
-        if d in clients:
-            clients.remove(d)
+    await manager.broadcast(data)

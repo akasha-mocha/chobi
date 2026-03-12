@@ -30,12 +30,9 @@ def get_system_status():
 
     return {
 
-        "cpu": psutil.cpu_percent(interval=0.1),
-
+        "cpu": psutil.cpu_percent(),
         "memory": psutil.virtual_memory().percent,
-
         "time": int(time.time()),
-
         "ai_status": _read_ai_status()
 
     }
