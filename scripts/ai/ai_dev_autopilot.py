@@ -1,185 +1,322 @@
-import yaml
-import subprocess
+import time
 import traceback
 from pathlib import Path
+from typing import List, Dict
 
-from scripts.core.workflow.workflow_engine import WorkflowEngine
-from scripts.core.dev_state_manager import DevStateManager
+from scripts.utils.logger import get_logger
+
+logger = get_logger("ai_autopilot")
+
+ROOT = Path(__file__).resolve().parents[2]
+
+TASK_DIR = ROOT / "tickets/tasks"
+BUG_DIR = ROOT / "tickets/bugs"
+KNOWLEDGE_DIR = ROOT / "knowledge"
+STATE_FILE = ROOT / "runtime/autopilot_state.txt"
 
 
-class AIDevAutopilot:
+# -----------------------------------------
+# state
+# -----------------------------------------
 
-    def __init__(self, config_path=".antigravity/autopilot/dev_loop.yaml"):
+class AutopilotState:
 
-        self.config_path = Path(config_path)
+    RUNNING = "running"
+    PAUSED = "paused"
+    STOPPED = "stopped"
 
-        if not self.config_path.exists():
-            raise FileNotFoundError(f"Autopilot config not found: {config_path}")
 
-        self.engine = WorkflowEngine()
-        self.state = DevStateManager()
+def set_state(state: str):
 
-        self.config = self._load_config()
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-        self.tests_passed = False
+    with open(STATE_FILE, "w", encoding="utf8") as f:
+        f.write(state)
 
-    # --------------------------------
-    # load yaml
-    # --------------------------------
 
-    def _load_config(self):
+def get_state():
 
-        with open(self.config_path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f)
+    if not STATE_FILE.exists():
+        return AutopilotState.STOPPED
 
-    # --------------------------------
-    # run autopilot
-    # --------------------------------
+    with open(STATE_FILE, encoding="utf8") as f:
+        return f.read().strip()
+
+
+# -----------------------------------------
+# file utils
+# -----------------------------------------
+
+def read_md(path: Path) -> str:
+
+    with open(path, encoding="utf8") as f:
+        return f.read()
+
+
+def write_md(path: Path, text: str):
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(path, "w", encoding="utf8") as f:
+        f.write(text)
+
+
+# -----------------------------------------
+# task manager
+# -----------------------------------------
+
+def list_tasks() -> List[Path]:
+
+    if not TASK_DIR.exists():
+        return []
+
+    return list(TASK_DIR.glob("*.md"))
+
+
+def list_bugs() -> List[Path]:
+
+    if not BUG_DIR.exists():
+        return []
+
+    return list(BUG_DIR.glob("*.md"))
+
+
+def next_task():
+
+    tasks = list_tasks()
+
+    if not tasks:
+        return None
+
+    return tasks[0]
+
+
+# -----------------------------------------
+# planner
+# -----------------------------------------
+
+class Planner:
+
+    def plan(self):
+
+        logger.info("Planning tasks...")
+
+        tasks = list_tasks()
+
+        if tasks:
+            return
+
+        task = """ID: TASK-1
+Title: Improve dashboard UI
+Status: OPEN
+Priority: MEDIUM
+"""
+
+        write_md(TASK_DIR / "task_001.md", task)
+
+        logger.info("Task created")
+
+
+# -----------------------------------------
+# code generator
+# -----------------------------------------
+
+class CodeGenerator:
+
+    def run(self, task_path: Path):
+
+        logger.info(f"Generating code for {task_path}")
+
+        # placeholder for LLM
+
+        time.sleep(1)
+
+        return True
+
+
+# -----------------------------------------
+# tester
+# -----------------------------------------
+
+class Tester:
 
     def run(self):
 
-        print("\n==============================")
-        print("AI DEV AUTOPILOT START")
-        print("==============================\n")
+        logger.info("Running tests")
 
-        cycle = self.state.next_cycle()
+        time.sleep(1)
 
-        print(f"DEV CYCLE: {cycle}\n")
-
-        steps = self.config.get("steps", [])
-
-        for step in steps:
-
-            if step.get("loop"):
-
-                self._run_loop(step)
-
-            else:
-
-                self._execute_step(step)
-
-        print("\n==============================")
-        print("AI DEV AUTOPILOT FINISHED")
-        print("==============================\n")
-
-    # --------------------------------
-    # loop execution
-    # --------------------------------
-
-    def _run_loop(self, step):
-
-        max_cycles = step.get("max_cycles", 10)
-
-        print(f"\nEntering dev loop (max {max_cycles})")
-
-        for i in range(max_cycles):
-
-            print(f"\n===== DEV LOOP {i+1} =====")
-
-            for s in step.get("steps", []):
-
-                self._execute_step(s)
-
-                if self.tests_passed:
-
-                    print("\n✔ Tests passed. Development complete.")
-                    return
-
-        print("\nMax dev cycles reached.")
-
-    # --------------------------------
-    # step execution
-    # --------------------------------
-
-    def _execute_step(self, step):
-
-        name = step.get("name", "unknown")
-
-        print(f"\n--- STEP: {name} ---")
-
-        try:
-
-            if "workflow" in step:
-
-                self._run_workflow(step["workflow"])
-
-            elif "script" in step:
-
-                self._run_script(step["script"], name)
-
-            elif "steps" in step:
-
-                for s in step["steps"]:
-                    self._execute_step(s)
-
-        except Exception as e:
-
-            print(f"STEP FAILED: {name}")
-            print(e)
-            traceback.print_exc()
-
-    # --------------------------------
-    # workflow
-    # --------------------------------
-
-    def _run_workflow(self, workflow_path):
-
-        path = Path(workflow_path)
-
-        if not path.exists():
-            raise FileNotFoundError(f"Workflow not found: {workflow_path}")
-
-        print(f"Running workflow: {workflow_path}")
-
-        self.engine.run_workflow(workflow_path)
-
-    # --------------------------------
-    # script
-    # --------------------------------
-
-    def _run_script(self, script_path, step_name):
-
-        path = Path(script_path)
-
-        if not path.exists():
-            raise FileNotFoundError(f"Script not found: {script_path}")
-
-        print(f"Running script: {script_path}")
-
-        result = subprocess.run(
-            ["python", script_path],
-            capture_output=True,
-            text=True
-        )
-
-        print(result.stdout)
-
-        if result.returncode != 0:
-
-            print("SCRIPT ERROR:")
-            print(result.stderr)
-
-            raise RuntimeError("Script execution failed")
-
-        # test success detection
-
-        if step_name == "run_tests":
-
-            if "FAILED" not in result.stdout and "ERROR" not in result.stdout:
-
-                self.tests_passed = True
-
-    # --------------------------------
-    # entry
-    # --------------------------------
+        return True
 
 
-def main():
+# -----------------------------------------
+# bug detector
+# -----------------------------------------
+
+class BugDetector:
+
+    def run(self) -> List[Dict]:
+
+        logger.info("Scanning for bugs")
+
+        # placeholder
+
+        return []
+
+
+# -----------------------------------------
+# bug fixer
+# -----------------------------------------
+
+class BugFixer:
+
+    def fix(self, bug):
+
+        logger.info(f"Fixing bug {bug}")
+
+        time.sleep(1)
+
+
+# -----------------------------------------
+# knowledge manager
+# -----------------------------------------
+
+class KnowledgeManager:
+
+    def update(self, text: str):
+
+        path = KNOWLEDGE_DIR / "autopilot_log.md"
+
+        old = ""
+
+        if path.exists():
+            old = read_md(path)
+
+        write_md(path, old + "\n" + text)
+
+
+# -----------------------------------------
+# main loop
+# -----------------------------------------
+
+class AIDevAutopilot:
+
+    def __init__(self):
+
+        self.planner = Planner()
+        self.codegen = CodeGenerator()
+        self.tester = Tester()
+        self.detector = BugDetector()
+        self.fixer = BugFixer()
+        self.knowledge = KnowledgeManager()
+
+    # -----------------------------
+
+    def run_task(self, task_path: Path):
+
+        logger.info(f"Running task {task_path}")
+
+        ok = self.codegen.run(task_path)
+
+        if not ok:
+            logger.error("Code generation failed")
+            return
+
+        test_ok = self.tester.run()
+
+        if not test_ok:
+
+            bug = {
+                "title": "Test failed",
+                "task": task_path.name
+            }
+
+            self.create_bug(bug)
+
+    # -----------------------------
+
+    def create_bug(self, bug):
+
+        bug_id = int(time.time())
+
+        path = BUG_DIR / f"bug_{bug_id}.md"
+
+        text = f"""
+ID: BUG-{bug_id}
+Title: {bug['title']}
+Status: OPEN
+Priority: HIGH
+Task: {bug['task']}
+"""
+
+        write_md(path, text)
+
+        logger.warning(f"Bug created {path}")
+
+    # -----------------------------
+
+    def handle_bugs(self):
+
+        bugs = list_bugs()
+
+        for bug_path in bugs:
+
+            logger.info(f"Handling bug {bug_path}")
+
+            bug_text = read_md(bug_path)
+
+            bug = {
+                "title": bug_text
+            }
+
+            self.fixer.fix(bug)
+
+    # -----------------------------
+
+    def loop(self):
+
+        logger.info("AI Dev Autopilot started")
+
+        set_state(AutopilotState.RUNNING)
+
+        while True:
+
+            state = get_state()
+
+            if state == AutopilotState.STOPPED:
+                logger.info("Autopilot stopped")
+                break
+
+            if state == AutopilotState.PAUSED:
+                time.sleep(2)
+                continue
+
+            try:
+
+                self.planner.plan()
+
+                task = next_task()
+
+                if task:
+                    self.run_task(task)
+
+                self.handle_bugs()
+
+                self.knowledge.update("loop executed")
+
+            except Exception:
+
+                logger.error(traceback.format_exc())
+
+            time.sleep(5)
+
+
+# -----------------------------------------
+# entry
+# -----------------------------------------
+
+def run_autopilot():
 
     autopilot = AIDevAutopilot()
 
-    autopilot.run()
-
-
-if __name__ == "__main__":
-    main()
+    autopilot.loop()
