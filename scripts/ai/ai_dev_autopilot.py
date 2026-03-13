@@ -1,9 +1,10 @@
 import time
-import traceback
 from pathlib import Path
-from typing import List, Dict
 
 from scripts.utils.logger import get_logger
+from scripts.ai.task_execution_engine import TaskExecutionEngine
+from scripts.ai.task_generator import TaskGenerator
+from scripts.ai.goal_engine import GoalEngine
 
 logger = get_logger("ai_autopilot")
 
@@ -11,22 +12,35 @@ ROOT = Path(__file__).resolve().parents[2]
 
 TASK_DIR = ROOT / "tickets/tasks"
 BUG_DIR = ROOT / "tickets/bugs"
-KNOWLEDGE_DIR = ROOT / "knowledge"
 STATE_FILE = ROOT / "runtime/autopilot_state.txt"
 
 
-# -----------------------------------------
-# state
-# -----------------------------------------
-
 class AutopilotState:
-
     RUNNING = "running"
     PAUSED = "paused"
     STOPPED = "stopped"
 
 
-def set_state(state: str):
+def read_state():
+
+    if not STATE_FILE.exists():
+        return AutopilotState.RUNNING
+
+    try:
+
+        with open(STATE_FILE, encoding="utf8") as f:
+            state = f.read().strip()
+
+        if state == "":
+            return AutopilotState.RUNNING
+
+        return state
+
+    except Exception:
+        return AutopilotState.RUNNING
+
+
+def write_state(state):
 
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
@@ -34,286 +48,120 @@ def set_state(state: str):
         f.write(state)
 
 
-def get_state():
-
-    if not STATE_FILE.exists():
-        return AutopilotState.STOPPED
-
-    with open(STATE_FILE, encoding="utf8") as f:
-        return f.read().strip()
-
-
-# -----------------------------------------
-# file utils
-# -----------------------------------------
-
-def read_md(path: Path) -> str:
-
-    with open(path, encoding="utf8") as f:
-        return f.read()
-
-
-def write_md(path: Path, text: str):
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(path, "w", encoding="utf8") as f:
-        f.write(text)
-
-
-# -----------------------------------------
-# task manager
-# -----------------------------------------
-
-def list_tasks() -> List[Path]:
-
-    if not TASK_DIR.exists():
-        return []
-
-    return list(TASK_DIR.glob("*.md"))
-
-
-def list_bugs() -> List[Path]:
-
-    if not BUG_DIR.exists():
-        return []
-
-    return list(BUG_DIR.glob("*.md"))
-
-
-def next_task():
-
-    tasks = list_tasks()
-
-    if not tasks:
-        return None
-
-    return tasks[0]
-
-
-# -----------------------------------------
-# planner
-# -----------------------------------------
-
-class Planner:
-
-    def plan(self):
-
-        logger.info("Planning tasks...")
-
-        tasks = list_tasks()
-
-        if tasks:
-            return
-
-        task = """ID: TASK-1
-Title: Improve dashboard UI
-Status: OPEN
-Priority: MEDIUM
-"""
-
-        write_md(TASK_DIR / "task_001.md", task)
-
-        logger.info("Task created")
-
-
-# -----------------------------------------
-# code generator
-# -----------------------------------------
-
-class CodeGenerator:
-
-    def run(self, task_path: Path):
-
-        logger.info(f"Generating code for {task_path}")
-
-        # placeholder for LLM
-
-        time.sleep(1)
-
-        return True
-
-
-# -----------------------------------------
-# tester
-# -----------------------------------------
-
-class Tester:
-
-    def run(self):
-
-        logger.info("Running tests")
-
-        time.sleep(1)
-
-        return True
-
-
-# -----------------------------------------
-# bug detector
-# -----------------------------------------
-
-class BugDetector:
-
-    def run(self) -> List[Dict]:
-
-        logger.info("Scanning for bugs")
-
-        # placeholder
-
-        return []
-
-
-# -----------------------------------------
-# bug fixer
-# -----------------------------------------
-
-class BugFixer:
-
-    def fix(self, bug):
-
-        logger.info(f"Fixing bug {bug}")
-
-        time.sleep(1)
-
-
-# -----------------------------------------
-# knowledge manager
-# -----------------------------------------
-
-class KnowledgeManager:
-
-    def update(self, text: str):
-
-        path = KNOWLEDGE_DIR / "autopilot_log.md"
-
-        old = ""
-
-        if path.exists():
-            old = read_md(path)
-
-        write_md(path, old + "\n" + text)
-
-
-# -----------------------------------------
-# main loop
-# -----------------------------------------
-
 class AIDevAutopilot:
 
     def __init__(self):
 
-        self.planner = Planner()
-        self.codegen = CodeGenerator()
-        self.tester = Tester()
-        self.detector = BugDetector()
-        self.fixer = BugFixer()
-        self.knowledge = KnowledgeManager()
+        self.goal_engine = GoalEngine()
+        self.task_generator = TaskGenerator()
+        self.task_engine = TaskExecutionEngine()
+
+        # safety limits
+        self.max_tasks = 5
+        self.max_bugs = 10
+        self.loop_interval = 5
 
     # -----------------------------
-
-    def run_task(self, task_path: Path):
-
-        logger.info(f"Running task {task_path}")
-
-        ok = self.codegen.run(task_path)
-
-        if not ok:
-            logger.error("Code generation failed")
-            return
-
-        test_ok = self.tester.run()
-
-        if not test_ok:
-
-            bug = {
-                "title": "Test failed",
-                "task": task_path.name
-            }
-
-            self.create_bug(bug)
-
+    # helpers
     # -----------------------------
 
-    def create_bug(self, bug):
+    def count_tasks(self):
 
-        bug_id = int(time.time())
+        if not TASK_DIR.exists():
+            return 0
 
-        path = BUG_DIR / f"bug_{bug_id}.md"
+        return len(list(TASK_DIR.glob("*.md")))
 
-        text = f"""
-ID: BUG-{bug_id}
-Title: {bug['title']}
-Status: OPEN
-Priority: HIGH
-Task: {bug['task']}
-"""
+    def count_bugs(self):
 
-        write_md(path, text)
+        if not BUG_DIR.exists():
+            return 0
 
-        logger.warning(f"Bug created {path}")
+        return len(list(BUG_DIR.glob("*.md")))
 
     # -----------------------------
-
-    def handle_bugs(self):
-
-        bugs = list_bugs()
-
-        for bug_path in bugs:
-
-            logger.info(f"Handling bug {bug_path}")
-
-            bug_text = read_md(bug_path)
-
-            bug = {
-                "title": bug_text
-            }
-
-            self.fixer.fix(bug)
-
+    # main loop
     # -----------------------------
 
     def loop(self):
 
         logger.info("AI Dev Autopilot started")
 
-        set_state(AutopilotState.RUNNING)
+        write_state(AutopilotState.RUNNING)
 
         while True:
 
-            state = get_state()
+            state = read_state()
 
             if state == AutopilotState.STOPPED:
+
                 logger.info("Autopilot stopped")
                 break
 
             if state == AutopilotState.PAUSED:
-                time.sleep(2)
+
+                logger.info("Autopilot paused")
+                time.sleep(self.loop_interval)
                 continue
 
             try:
 
-                self.planner.plan()
+                # -----------------------------
+                # Goal analysis
+                # -----------------------------
 
-                task = next_task()
+                self.goal_engine.run()
 
-                if task:
-                    self.run_task(task)
+                # -----------------------------
+                # Task generation
+                # -----------------------------
 
-                self.handle_bugs()
+                task_count = self.count_tasks()
 
-                self.knowledge.update("loop executed")
+                if task_count < self.max_tasks:
 
-            except Exception:
+                    logger.info("Generating new task")
 
-                logger.error(traceback.format_exc())
+                    self.task_generator.run()
 
-            time.sleep(5)
+                else:
+
+                    logger.info("Task queue full")
+
+                # -----------------------------
+                # Task execution
+                # -----------------------------
+
+                self.task_engine.run_next_task()
+
+                # -----------------------------
+                # Bug monitoring
+                # -----------------------------
+
+                bug_count = self.count_bugs()
+
+                if bug_count > self.max_bugs:
+
+                    logger.warning(
+                        f"Bug count exceeded limit ({bug_count})"
+                    )
+
+                # -----------------------------
+                # loop sleep
+                # -----------------------------
+
+                time.sleep(self.loop_interval)
+
+            except Exception as e:
+
+                logger.error(str(e))
+
+                time.sleep(self.loop_interval)
 
 
-# -----------------------------------------
-# entry
-# -----------------------------------------
+# -------------------------------------
+# entry point
+# -------------------------------------
 
 def run_autopilot():
 
