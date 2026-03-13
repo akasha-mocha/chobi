@@ -1,9 +1,10 @@
-import time
-import traceback
 from pathlib import Path
-from typing import List
+from typing import Dict
+import subprocess
+import time
 
 from scripts.utils.logger import get_logger
+from scripts.ai.ai_runner import run_ai
 
 logger = get_logger("task_engine")
 
@@ -12,220 +13,154 @@ ROOT = Path(__file__).resolve().parents[2]
 TASK_DIR = ROOT / "tickets/tasks"
 BUG_DIR = ROOT / "tickets/bugs"
 
-AUTOPILOT_STATE = ROOT / "runtime/autopilot_state.txt"
-
-
-class Task:
-
-    def __init__(self, file: Path):
-
-        self.file = file
-        self.id = ""
-        self.title = ""
-        self.status = ""
-        self.priority = ""
-
-        self._parse()
-
-    def _parse(self):
-
-        text = self.file.read_text(encoding="utf8")
-
-        for line in text.splitlines():
-
-            if line.startswith("ID:"):
-                self.id = line.split(":", 1)[1].strip()
-
-            if line.startswith("Title:"):
-                self.title = line.split(":", 1)[1].strip()
-
-            if line.startswith("Status:"):
-                self.status = line.split(":", 1)[1].strip()
-
-            if line.startswith("Priority:"):
-                self.priority = line.split(":", 1)[1].strip()
-
-    def set_status(self, new_status: str):
-
-        text = self.file.read_text(encoding="utf8")
-
-        lines = []
-
-        for line in text.splitlines():
-
-            if line.startswith("Status:"):
-                lines.append(f"Status: {new_status}")
-            else:
-                lines.append(line)
-
-        self.file.write_text("\n".join(lines), encoding="utf8")
-
 
 class TaskExecutionEngine:
 
     def __init__(self):
 
-        logger.info("TaskExecutionEngine initialized")
+        self.task_dir = TASK_DIR
+        self.bug_dir = BUG_DIR
 
-    # --------------------------------
-    # autopilot state
-    # --------------------------------
+    # -----------------------------
 
-    def autopilot_state(self):
+    def list_tasks(self):
 
-        if not AUTOPILOT_STATE.exists():
-            return "STOP"
+        if not self.task_dir.exists():
+            return []
 
-        return AUTOPILOT_STATE.read_text().strip()
+        return list(self.task_dir.glob("*.md"))
 
-    # --------------------------------
-    # load tasks
-    # --------------------------------
+    # -----------------------------
 
-    def load_tasks(self) -> List[Task]:
+    def read_task(self, path: Path):
 
-        tasks = []
+        with open(path, encoding="utf8") as f:
+            return f.read()
 
-        if not TASK_DIR.exists():
-            return tasks
+    # -----------------------------
 
-        for f in TASK_DIR.glob("*.md"):
+    def mark_task_done(self, path: Path):
 
-            try:
+        text = self.read_task(path)
 
-                task = Task(f)
+        text = text.replace(
+            "Status: OPEN",
+            "Status: DONE"
+        )
 
-                if task.status.upper() == "OPEN":
-                    tasks.append(task)
+        with open(path, "w", encoding="utf8") as f:
+            f.write(text)
 
-            except Exception as e:
+    # -----------------------------
 
-                logger.error(f"Task parse error {f}: {e}")
+    def create_bug(self, task_path: Path, error: str):
 
-        return tasks
+        bug_id = int(time.time())
 
-    # --------------------------------
-    # AI execution stub
-    # --------------------------------
+        bug_file = self.bug_dir / f"bug_{bug_id}.md"
 
-    def execute_task(self, task: Task):
-
-        logger.info(f"Executing task {task.id} : {task.title}")
-
-        # TODO: AI execution here
-
-        time.sleep(2)
-
-        return True
-
-    # --------------------------------
-    # bug create
-    # --------------------------------
-
-    def create_bug(self, task: Task, error: str):
-
-        BUG_DIR.mkdir(parents=True, exist_ok=True)
-
-        bug_file = BUG_DIR / f"bug_{task.id}.md"
-
-        content = f"""
-ID: BUG-{task.id}
-Title: Failure in task {task.id}
+        text = f"""
+ID: BUG-{bug_id}
+Title: Task execution failed
 Status: OPEN
 Priority: HIGH
-
-Source Task: {task.id}
+Task: {task_path.name}
 
 Error:
-
 {error}
 """
 
-        bug_file.write_text(content.strip(), encoding="utf8")
+        bug_file.parent.mkdir(parents=True, exist_ok=True)
 
-        logger.error(f"BUG created for task {task.id}")
+        with open(bug_file, "w", encoding="utf8") as f:
+            f.write(text)
 
-    # --------------------------------
-    # run single task
-    # --------------------------------
+        logger.warning(f"Bug created: {bug_file}")
 
-    def run_task(self, task: Task):
+    # -----------------------------
+
+    def generate_code(self, task_text: str):
+
+        prompt = f"""
+You are a senior software engineer.
+
+Implement the following task.
+
+{task_text}
+"""
+
+        result = run_ai(prompt)
+
+        return result
+
+    # -----------------------------
+
+    def run_tests(self):
 
         try:
 
-            task.set_status("RUNNING")
+            result = subprocess.run(
+                ["pytest"],
+                capture_output=True,
+                text=True
+            )
 
-            result = self.execute_task(task)
+            if result.returncode != 0:
 
-            if result:
+                return False, result.stdout + result.stderr
 
-                task.set_status("DONE")
+            return True, ""
 
-                logger.info(f"Task {task.id} DONE")
+        except Exception as e:
 
-            else:
+            return False, str(e)
 
-                raise RuntimeError("Task returned failure")
+    # -----------------------------
 
-        except Exception:
+    def execute_task(self, task_path: Path):
 
-            error = traceback.format_exc()
+        logger.info(f"Executing task {task_path}")
 
-            logger.error(error)
+        task_text = self.read_task(task_path)
 
-            self.create_bug(task, error)
+        try:
 
-            task.set_status("FAILED")
+            code = self.generate_code(task_text)
 
-    # --------------------------------
-    # main loop
-    # --------------------------------
+            logger.info("AI generated code")
 
-    def run(self):
+        except Exception as e:
 
-        logger.info("TaskExecutionEngine started")
+            logger.error(str(e))
 
-        while True:
+            self.create_bug(task_path, str(e))
 
-            state = self.autopilot_state()
+            return
 
-            if state == "STOP":
+        ok, error = self.run_tests()
 
-                time.sleep(2)
-                continue
+        if not ok:
 
-            if state == "PAUSE":
+            self.create_bug(task_path, error)
 
-                time.sleep(2)
-                continue
+            return
 
-            try:
+        self.mark_task_done(task_path)
 
-                tasks = self.load_tasks()
+        logger.info("Task completed")
 
-                if not tasks:
+    # -----------------------------
 
-                    time.sleep(5)
-                    continue
+    def run_next_task(self):
 
-                for task in tasks:
+        tasks = self.list_tasks()
 
-                    self.run_task(task)
+        if not tasks:
 
-            except Exception:
+            logger.info("No tasks available")
 
-                logger.error(traceback.format_exc())
+            return
 
-            time.sleep(2)
+        task = tasks[0]
 
-
-def main():
-
-    engine = TaskExecutionEngine()
-
-    engine.run()
-
-
-if __name__ == "__main__":
-
-    main()
+        self.execute_task(task)
