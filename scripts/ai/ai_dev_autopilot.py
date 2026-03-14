@@ -1,51 +1,33 @@
+"""
+Chobi AI Dev Autopilot
+
+AIが自動で
+
+Goal
+ ↓
+Task生成
+ ↓
+Task計画
+ ↓
+Task実行
+ ↓
+Bug修正
+
+を繰り返す
+"""
+
 import time
-from pathlib import Path
 
-from scripts.utils.logger import get_logger
-from scripts.ai.task_execution_engine import TaskExecutionEngine
-from scripts.ai.task_generator import TaskGenerator
 from scripts.ai.goal_engine import GoalEngine
-
-logger = get_logger("ai_autopilot")
-
-ROOT = Path(__file__).resolve().parents[2]
-
-TASK_DIR = ROOT / "tickets/tasks"
-BUG_DIR = ROOT / "tickets/bugs"
-STATE_FILE = ROOT / "runtime/autopilot_state.txt"
+from scripts.ai.task_generator import TaskGenerator
+from scripts.ai.task_execution_engine import TaskExecutionEngine
+from scripts.ai.bug_auto_fix_engine import BugAutoFixEngine
+from scripts.planning.task_manager import TaskManager
+from scripts.planning.task_planner import TaskPlanner
+from scripts.utils.logger import get_logger
 
 
-class AutopilotState:
-    RUNNING = "running"
-    PAUSED = "paused"
-    STOPPED = "stopped"
-
-
-def read_state():
-
-    if not STATE_FILE.exists():
-        return AutopilotState.RUNNING
-
-    try:
-
-        with open(STATE_FILE, encoding="utf8") as f:
-            state = f.read().strip()
-
-        if state == "":
-            return AutopilotState.RUNNING
-
-        return state
-
-    except Exception:
-        return AutopilotState.RUNNING
-
-
-def write_state(state):
-
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(STATE_FILE, "w", encoding="utf8") as f:
-        f.write(state)
+logger = get_logger("AI_AUTOPILOT")
 
 
 class AIDevAutopilot:
@@ -54,117 +36,142 @@ class AIDevAutopilot:
 
         self.goal_engine = GoalEngine()
         self.task_generator = TaskGenerator()
-        self.task_engine = TaskExecutionEngine()
+        self.task_planner = TaskPlanner()
+        self.task_manager = TaskManager()
+        self.executor = TaskExecutionEngine()
+        self.bug_fixer = BugAutoFixEngine()
 
-        # safety limits
-        self.max_tasks = 5
-        self.max_bugs = 10
-        self.loop_interval = 5
+        self.running = True
 
-    # -----------------------------
-    # helpers
-    # -----------------------------
+    def run(self):
 
-    def count_tasks(self):
+        logger.info("AI Dev Autopilot Started")
 
-        if not TASK_DIR.exists():
-            return 0
-
-        return len(list(TASK_DIR.glob("*.md")))
-
-    def count_bugs(self):
-
-        if not BUG_DIR.exists():
-            return 0
-
-        return len(list(BUG_DIR.glob("*.md")))
-
-    # -----------------------------
-    # main loop
-    # -----------------------------
-
-    def loop(self):
-
-        logger.info("AI Dev Autopilot started")
-
-        write_state(AutopilotState.RUNNING)
-
-        while True:
-
-            state = read_state()
-
-            if state == AutopilotState.STOPPED:
-
-                logger.info("Autopilot stopped")
-                break
-
-            if state == AutopilotState.PAUSED:
-
-                logger.info("Autopilot paused")
-                time.sleep(self.loop_interval)
-                continue
+        while self.running:
 
             try:
 
-                # -----------------------------
-                # Goal analysis
-                # -----------------------------
-
-                self.goal_engine.run()
-
-                # -----------------------------
-                # Task generation
-                # -----------------------------
-
-                task_count = self.count_tasks()
-
-                if task_count < self.max_tasks:
-
-                    logger.info("Generating new task")
-
-                    self.task_generator.run()
-
-                else:
-
-                    logger.info("Task queue full")
-
-                # -----------------------------
-                # Task execution
-                # -----------------------------
-
-                self.task_engine.run_next_task()
-
-                # -----------------------------
-                # Bug monitoring
-                # -----------------------------
-
-                bug_count = self.count_bugs()
-
-                if bug_count > self.max_bugs:
-
-                    logger.warning(
-                        f"Bug count exceeded limit ({bug_count})"
-                    )
-
-                # -----------------------------
-                # loop sleep
-                # -----------------------------
-
-                time.sleep(self.loop_interval)
+                self.dev_cycle()
 
             except Exception as e:
 
-                logger.error(str(e))
+                logger.error(f"Autopilot error: {e}")
 
-                time.sleep(self.loop_interval)
+            time.sleep(3)
 
+    def dev_cycle(self):
 
-# -------------------------------------
-# entry point
-# -------------------------------------
+        logger.info("----- Dev Cycle Start -----")
+
+        goal = self.get_goal()
+
+        if not goal:
+            logger.info("No goal found")
+            return
+
+        logger.info(f"Goal: {goal}")
+
+        tasks = self.generate_tasks(goal)
+
+        if not tasks:
+            logger.info("No tasks generated")
+            return
+
+        tasks = self.plan_tasks(tasks)
+
+        self.save_tasks(tasks)
+
+        self.execute_tasks()
+
+        self.fix_bugs()
+
+        logger.info("----- Dev Cycle End -----")
+
+    def get_goal(self):
+
+        goal = self.goal_engine.get_current_goal()
+
+        return goal
+
+    def generate_tasks(self, goal):
+
+        logger.info("Generating tasks")
+
+        tasks = self.task_generator.generate(goal)
+
+        logger.info(f"{len(tasks)} tasks generated")
+
+        return tasks
+
+    def plan_tasks(self, tasks):
+
+        logger.info("Planning tasks")
+
+        tasks = self.task_planner.plan(tasks)
+
+        return tasks
+
+    def save_tasks(self, tasks):
+
+        logger.info("Saving tasks")
+
+        for task in tasks:
+
+            self.task_manager.create_task(task)
+
+    def execute_tasks(self):
+
+        logger.info("Executing tasks")
+
+        tasks = self.task_manager.get_pending_tasks()
+
+        for task in tasks:
+
+            logger.info(f"Executing task {task['id']}")
+
+            result = self.executor.execute(task)
+
+            if result["success"]:
+
+                self.task_manager.complete_task(task["id"])
+
+            else:
+
+                self.task_manager.fail_task(
+                    task["id"],
+                    result["error"]
+                )
+
+    def fix_bugs(self):
+
+        logger.info("Bug fixing")
+
+        bugs = self.task_manager.get_failed_tasks()
+
+        for bug in bugs:
+
+            fix = self.bug_fixer.fix(bug)
+
+            if fix["success"]:
+
+                self.task_manager.complete_task(bug["id"])
+
+            else:
+
+                logger.warning(f"Bug fix failed {bug['id']}")
+
+    def stop(self):
+
+        self.running = False
+
 
 def run_autopilot():
 
     autopilot = AIDevAutopilot()
 
-    autopilot.loop()
+    autopilot.run()
+
+
+if __name__ == "__main__":
+
+    run_autopilot()
